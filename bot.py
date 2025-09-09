@@ -161,8 +161,8 @@ async def cooldown_notifier_task(app: Application):
 async def health_handler(request):
     return web.json_response({"status": "ok", "ts": time.time()})
 
-# ==================== Main ====================
-async def init_bot():
+# ==================== Entrypoint ====================
+async def main():
     global redis_client, semaphore
     redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
     await redis_client.ping()
@@ -188,8 +188,9 @@ async def init_bot():
     await site.start()
 
     logger.info("Starting bot polling")
-    await app.run_polling(drop_pending_updates=True)
+    # ✅ تشغيل البوت بدون asyncio.run
+    app.run_polling(drop_pending_updates=True)
 
-# ==================== Entrypoint ====================
 if __name__ == "__main__":
-    asyncio.run(init_bot())
+    # تشغيل event loop خارجي فقط للبوت
+    asyncio.get_event_loop().run_until_complete(main())
