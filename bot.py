@@ -1,60 +1,17 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler
 import os
+import asyncio
 
-# جلب التوكن من متغير البيئة (آمن أكثر)
-TOKEN = os.getenv('BOT_TOKEN')  # Important for Koyeb!
+TOKEN = os.getenv('BOT_TOKEN')
 
-# أمر البدء
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('مرحباً! أنا بوتك الجديد على Koyeb. 😊')
-
-# أمر المساعدة
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-    /start - بدء البوت
-    /help - عرض الرسالة المساعدة
-    /info - معلومات عن البوت
-    """
-    await update.message.reply_text(help_text)
-
-# أمر جديد
-async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('⚡ هذا البوت يعمل على Koyeb Cloud!')
-
-# رد على الرسائل
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text.lower()
-    
-    if 'مرحبا' in user_message or 'اهلا' in user_message:
-        await update.message.reply_text('أهلاً وسهلاً! كيف يمكنني مساعدتك؟')
-    elif 'شكرا' in user_message:
-        await update.message.reply_text('العفو! 😊')
-    else:
-        await update.message.reply_text('لم أفهم الرسالة، جرب /help للمساعدة.')
-
-# معالجة الأخطاء
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"خطأ: {context.error}")
+async def start(update, context):
+    await update.message.reply_text('مرحباً! البوت يعمل بدون Docker ✅')
 
 def main():
-    # التأكد من وجود التوكن
-    if not TOKEN:
-        print("Error: BOT_TOKEN not set!")
-        return
-    
-    # إنشاء التطبيق
     app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
     
-    // إضافة الأوامر
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("info", info_command))
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
-    app.add_error_handler(error_handler)
-    
-    // البدء
-    print("✅ البوت يعمل على Koyeb...")
+    print("البوت يعمل...")
     app.run_polling()
 
 if __name__ == "__main__":
