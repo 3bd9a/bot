@@ -6,8 +6,9 @@ import aiohttp
 import logging
 import os
 import time
-from datetime import datetime
 import json
+from datetime import datetime, timedelta
+import asyncio
 
 # ==================== إعدادات متقدمة للـ Logging ====================
 logging.basicConfig(
@@ -25,10 +26,18 @@ class PerformanceTracker:
     def __init__(self):
         self.requests_count = 0
         self.errors_count = 0
+        self.success_count = 0
         self.start_time = time.time()
+        self.user_requests = {}
     
-    def log_request(self):
+    def log_request(self, user_id):
         self.requests_count += 1
+        if user_id not in self.user_requests:
+            self.user_requests[user_id] = 0
+        self.user_requests[user_id] += 1
+    
+    def log_success(self):
+        self.success_count += 1
     
     def log_error(self):
         self.errors_count += 1
@@ -37,9 +46,11 @@ class PerformanceTracker:
         uptime = time.time() - self.start_time
         return {
             "requests": self.requests_count,
+            "success": self.success_count,
             "errors": self.errors_count,
+            "unique_users": len(self.user_requests),
             "uptime_seconds": int(uptime),
-            "uptime_human": str(datetime.timedelta(seconds=int(uptime)))
+            "uptime_human": str(timedelta(seconds=int(uptime)))
         }
 
 tracker = PerformanceTracker()
@@ -76,15 +87,16 @@ if not TOKEN:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """رسالة ترحيب محسنة"""
     try:
-        tracker.log_request()
-        logger.info(f"User {update.effective_user.id} used /start")
+        user_id = update.effective_user.id
+        tracker.log_request(user_id)
+        logger.info(f"User {user_id} used /start")
         
         welcome_text = """
 🔐 **بوت حسابات SSH المطور**
 
 📋 **الأوامر المتاحة:**
 /get - الحصول على حساب SSH مجاني
-/help - عرض المساعدة
+/help - عرض المساعدة  
 /stats - إحصائيات البوت
 
 ⚡ **مميزات البوت:**
@@ -103,14 +115,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """جلب حساب SSH مع معالجة متقدمة للأخطاء"""
     try:
-        tracker.log_request()
         user_id = update.effective_user.id
+        tracker.log_request(user_id)
         logger.info(f"User {user_id} requested SSH account")
+        
+        # التحقق من عدد الطلبات (5 طلبات كحد أقصى لكل مستخدم)
+        if tracker.user_requests.get(user_id, 0) > 5:
+            await update.message.reply_text("❌ لقد تجاوزت الحد المسموح من الطلبات (5 طلبات)")
+            return
         
         # رسالة الانتظار
         wait_msg = await update.message.reply_text("⏳ جاري الاتصال بالخادم...")
         
-        # ⭐⭐⭐ الإعدادات المحسنة ⭐⭐⭐
+        # إعدادات اتصال متقدمة
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -125,23 +142,22 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with session.post(
                     API_URL, 
                     json={"store_owner_id": 1},
-                    headers=headers,  # ⬅️ الإضافة الأهم
+                    headers=headers,
                     ssl=False
                 ) as response:
                     
                     logger.info(f"API Response Status: {response.status}")
+                    response_text = await response.text()
+                    logger.info(f"API Response: {response_text}")
                     
-logger.info(f"API Response Status: {response.status}")
-response_text = await response.text()
-logger.info(f"API Response: {response_text}")
-
-# ⭐⭐ التصحيح هنا: تقبل كود 200 و 201 كنجاح ⭐⭐
-if response.status in [200, 201]:
-    try:
-        data = json.loads(response_text)
-        logger.info(f"SSH account generated for user {user_id}: {data}")
-        
-        ssh_info = f"""
+                    # ⭐⭐ يقبل كود 200 و 201 كنجاح ⭐⭐
+                    if response.status in [200, 201]:
+                        try:
+                            data = json.loads(response_text)
+                            logger.info(f"SSH account generated for user {user_id}: {data}")
+                            tracker.log_success()
+                            
+                            ssh_info = f"""
 🔐 **تم الحصول على حساب SSH بنجاح!**
 
 👤 **المستخدم:** `{data.get('Usuario', 'N/A')}`
@@ -149,20 +165,20 @@ if response.status in [200, 201]:
 ⏰ **مدة الصلاحية:** {data.get('Expiracao', 'N/A')}
 
 ⚡ **استمتع بالاستخدام!**
-        """
-        
-        await wait_msg.delete()
-        await update.message.reply_text(ssh_info, parse_mode='Markdown')
-        
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse JSON: {response_text}")
-        await wait_msg.edit_text("❌ خطأ في بيانات الخادم")
-        
-else:
-    # هذا للرموز الأخرى التي تعتبر أخطاء حقاً
-    logger.warning(f"API error {response.status}: {response_text}")
-    
-    error_msg = f"""
+                            """
+                            
+                            await wait_msg.delete()
+                            await update.message.reply_text(ssh_info, parse_mode='Markdown')
+                            
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse JSON: {response_text}")
+                            await wait_msg.edit_text("❌ خطأ في بيانات الخادم")
+                            
+                    else:
+                        # معالجة الأخطاء الأخرى
+                        logger.warning(f"API error {response.status}: {response_text}")
+                        
+                        error_msg = f"""
 ❌ **خطأ في الاتصال**
 
 📊 **التفاصيل:**
@@ -172,8 +188,8 @@ else:
 🔧 **الحل:**
 - حاول مرة أخرى بعد قليل
 - للدعم: @SAYF1INFO
-    """
-    await wait_msg.edit_text(error_msg, parse_mode='Markdown')
+                        """
+                        await wait_msg.edit_text(error_msg, parse_mode='Markdown')
                         
             except aiohttp.ClientError as e:
                 logger.error(f"Network error: {e}")
@@ -190,7 +206,9 @@ else:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض المساعدة"""
     try:
-        tracker.log_request()
+        user_id = update.effective_user.id
+        tracker.log_request(user_id)
+        
         help_text = """
 🆘 **مركز المساعدة**
 
@@ -219,12 +237,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض إحصائيات البوت"""
     try:
+        user_id = update.effective_user.id
+        tracker.log_request(user_id)
+        
         stats = tracker.get_stats()
         stats_text = f"""
 📊 **إحصائيات البوت المتقدمة**
 
 • الطلبات الكلية: {stats['requests']}
+• الطلبات الناجحة: {stats['success']}
 • الأخطاء المسجلة: {stats['errors']}
+• المستخدمين النشطين: {stats['unique_users']}
 • وقت التشغيل: {stats['uptime_human']}
 • آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
