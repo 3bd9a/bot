@@ -161,36 +161,77 @@ async def cooldown_notifier_task(app: Application):
 async def health_handler(request):
     return web.json_response({"status": "ok", "ts": time.time()})
 
-# ==================== Entrypoint ====================
+# ==================== Main ====================
 async def main():
     global redis_client, semaphore
+    
+    # التحقق من المتغيرات المطلوبة
+    if not Config.BOT_TOKEN:
+        raise ValueError("BOT_TOKEN environment variable is required")
+    if not Config.API_URL:
+        raise ValueError("API_URL environment variable is required")
+    
+    # إعداد Redis
     redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
     await redis_client.ping()
     logger.info("Connected to Redis")
 
+    # إعداد Semaphore
     semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
+    # إعداد البوت
     app = Application.builder().token(Config.BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("get", get_command))
     app.add_handler(CommandHandler("mystats", my_stats_command))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # Notifier
-    asyncio.create_task(cooldown_notifier_task(app))
+    # بدء مهمة الإشعارات
+    notifier_task = asyncio.create_task(cooldown_notifier_task(app))
 
-    # Health server
+    # إعداد خادم الصحة
     web_app = web.Application()
     web_app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8000)
     await site.start()
+    logger.info("Health server started on port 8000")
 
-    logger.info("Starting bot polling")
-    # ✅ تشغيل البوت بدون asyncio.run
-    app.run_polling(drop_pending_updates=True)
+    try:
+        logger.info("Starting bot polling")
+        # استخدام start_polling بدلاً من run_polling
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        
+        # الحفاظ على البرنامج يعمل
+        while True:
+            await asyncio.sleep(1)
+            
+    except KeyboardInterrupt:
+        logger.info("Received interrupt signal")
+    finally:
+        # تنظيف الموارد
+        logger.info("Shutting down...")
+        notifier_task.cancel()
+        try:
+            await notifier_task
+        except asyncio.CancelledError:
+            pass
+        
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        await runner.cleanup()
+        await redis_client.close()
 
+# ==================== Entrypoint ====================
 if __name__ == "__main__":
-    # تشغيل event loop خارجي فقط للبوت
-    asyncio.get_event_loop().run_until_complete(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot failed to start: {e}")
+        raise
