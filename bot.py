@@ -20,9 +20,8 @@ from telegram.ext import (
 # ==================== Configuration ====================
 class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN")
+    API_URL = os.getenv("API_URL")  # يعتمد بالكامل على API_URL
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-    API_URL = os.getenv("API_URL", "https://painel.meowssh.shop:5000/test_ssh_public")
-    API_KEY = os.getenv("API_KEY", "mysecretkey")  # لازم تضيفه بالـ Secrets
 
     COOLDOWN_SECONDS = 3 * 60 * 60  # 3 ساعات
     REQUEST_TIMEOUT = 10
@@ -86,22 +85,15 @@ def get_main_keyboard():
     ]
     return InlineKeyboardMarkup(kb)
 
-# ==================== Handlers ====================
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    rem = await get_user_cooldown_remaining(user.id)
-    rem_text = format_timedelta_seconds(rem) if rem else "جاهز الآن"
-    await update.message.reply_text(
-        f"🔐 بوت حسابات SSH\n\nمرحباً @{user.username or user.id}\n\n• حالتك: {rem_text}",
-        reply_markup=get_main_keyboard(),
-    )
+# ==================== API Call ====================
+async def call_external_api(user_id: int, username: str) -> Dict:
+    if not Config.API_URL:
+        raise RuntimeError("API_URL not configured")
 
-async def _call_api_create_account(user_id: int, username: str) -> Dict:
     payload = {"user_id": user_id, "username": username, "timestamp": int(time.time())}
     timeout = aiohttp.ClientTimeout(total=Config.REQUEST_TIMEOUT)
-    headers = {"Authorization": f"Bearer {Config.API_KEY}"}
     async with semaphore:
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(Config.API_URL, json=payload) as resp:
                 text = await resp.text()
                 if resp.status in (200, 201):
@@ -111,8 +103,9 @@ async def _call_api_create_account(user_id: int, username: str) -> Dict:
                         return json.loads(text)
                 raise RuntimeError(f"API error {resp.status}: {text}")
 
+# ==================== Bot Handlers ====================
 async def provide_account_for_user(user_id: int, username: str):
-    data = await _call_api_create_account(user_id, username)
+    data = await call_external_api(user_id, username)
     now_ts = int(time.time())
     await set_user_cooldown(user_id, now_ts)
     return data
@@ -138,8 +131,17 @@ async def handle_get_request(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await send_account_message(chat_id, data, context)
         await progress.delete()
     except Exception:
-        logger.exception("Failed to create account")
-        await progress.edit_text("❌ فشل إنشاء الحساب. حاول لاحقًا.")
+        logger.exception("Failed to create account via API")
+        await progress.edit_text("❌ فشل الاتصال بالـ API. حاول لاحقًا.")
+
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    rem = await get_user_cooldown_remaining(user.id)
+    rem_text = format_timedelta_seconds(rem) if rem else "جاهز الآن"
+    await update.message.reply_text(
+        f"🔐 بوت حسابات SSH\n\nمرحباً @{user.username or user.id}\n\n• حالتك: {rem_text}",
+        reply_markup=get_main_keyboard(),
+    )
 
 async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -197,14 +199,13 @@ async def main():
     if not Config.BOT_TOKEN:
         logger.critical("BOT_TOKEN not set")
         return
+    if not Config.API_URL:
+        logger.critical("API_URL not set")
+        return
 
-redis_client = aioredis.from_url(
-    Config.REDIS_URL,
-    decode_responses=True
-)
-await redis_client.ping()
-logger.info("Connected to Redis")
-
+    redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
+    await redis_client.ping()
+    logger.info("Connected to Redis")
 
     semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
