@@ -15,7 +15,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-    API_URL = os.getenv("API_URL")  # يجب ضبطه في Secrets
+    API_URL = os.getenv("API_URL", "https://painel.meowssh.shop:5000/test_ssh_public")  # القيمة الافتراضية
 
     COOLDOWN_SECONDS = 3 * 60 * 60  # 3 ساعات
     REQUEST_TIMEOUT = 10
@@ -77,6 +77,11 @@ async def _call_api_create_account(user_id: int, username: str):
 async def provide_account_for_user(user_id: int, username: str):
     data = await _call_api_create_account(user_id, username)
     await set_user_cooldown(user_id)
+    
+    # تحديث إحصاءات المستخدم
+    current_count = int(await redis_client.get(f"stats:user_requests:{user_id}") or 0)
+    await redis_client.set(f"stats:user_requests:{user_id}", current_count + 1)
+    
     return data
 
 async def send_account_message(chat_id: int, data: dict, context: ContextTypes.DEFAULT_TYPE):
