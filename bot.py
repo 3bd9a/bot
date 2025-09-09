@@ -131,11 +131,17 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     logger.info(f"API Response Status: {response.status}")
                     
-                    if response.status == 200:
-                        data = await response.json()
-                        logger.info(f"SSH account generated for user {user_id}: {data}")
-                        
-                        ssh_info = f"""
+logger.info(f"API Response Status: {response.status}")
+response_text = await response.text()
+logger.info(f"API Response: {response_text}")
+
+# ⭐⭐ التصحيح هنا: تقبل كود 200 و 201 كنجاح ⭐⭐
+if response.status in [200, 201]:
+    try:
+        data = json.loads(response_text)
+        logger.info(f"SSH account generated for user {user_id}: {data}")
+        
+        ssh_info = f"""
 🔐 **تم الحصول على حساب SSH بنجاح!**
 
 👤 **المستخدم:** `{data.get('Usuario', 'N/A')}`
@@ -143,17 +149,20 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⏰ **مدة الصلاحية:** {data.get('Expiracao', 'N/A')}
 
 ⚡ **استمتع بالاستخدام!**
-                        """
-                        
-                        await wait_msg.delete()
-                        await update.message.reply_text(ssh_info, parse_mode='Markdown')
-                        
-                    else:
-                        # الحصول على تفاصيل الخطأ
-                        error_detail = await response.text()
-                        logger.warning(f"API error {response.status}: {error_detail}")
-                        
-                        error_msg = f"""
+        """
+        
+        await wait_msg.delete()
+        await update.message.reply_text(ssh_info, parse_mode='Markdown')
+        
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse JSON: {response_text}")
+        await wait_msg.edit_text("❌ خطأ في بيانات الخادم")
+        
+else:
+    # هذا للرموز الأخرى التي تعتبر أخطاء حقاً
+    logger.warning(f"API error {response.status}: {response_text}")
+    
+    error_msg = f"""
 ❌ **خطأ في الاتصال**
 
 📊 **التفاصيل:**
@@ -162,10 +171,9 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🔧 **الحل:**
 - حاول مرة أخرى بعد قليل
-- تأكد من اتصال الإنترنت
 - للدعم: @SAYF1INFO
-                        """
-                        await wait_msg.edit_text(error_msg, parse_mode='Markdown')
+    """
+    await wait_msg.edit_text(error_msg, parse_mode='Markdown')
                         
             except aiohttp.ClientError as e:
                 logger.error(f"Network error: {e}")
