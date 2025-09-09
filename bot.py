@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import aiohttp
 import logging
+import os  # ⬅️ Important: add this import!
 
 # تفعيل logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -21,8 +22,14 @@ def run_flask():
 # تشغيل Flask في thread منفصل
 Thread(target=run_flask, daemon=True).start()
 
-TOKEN = "YOUR_BOT_TOKEN"
+# ⬇️ التصحيح هنا: أخذ التوكن من environment variables
+TOKEN = os.getenv('BOT_TOKEN')  # ✅ صحيح
 API_URL = "https://painel.meowssh.shop:5000/test_ssh_public"
+
+# ⬇️ إضافة تحقق من التوكن
+if not TOKEN:
+    logging.error("❌ BOT_TOKEN not set in environment variables!")
+    exit(1)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """رسالة الترحيب"""
