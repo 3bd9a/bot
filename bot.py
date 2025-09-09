@@ -110,22 +110,30 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # رسالة الانتظار
         wait_msg = await update.message.reply_text("⏳ جاري الاتصال بالخادم...")
         
-        # إعدادات اتصال متقدمة
-        connector = aiohttp.TCPConnector(ssl=False, limit=100)
-        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_connect=10, sock_read=25)
+        # ⭐⭐⭐ الإعدادات المحسنة ⭐⭐⭐
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
         
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             try:
                 async with session.post(
                     API_URL, 
                     json={"store_owner_id": 1},
-                    ssl=False,
-                    headers={'User-Agent': 'SSH-Bot/1.0'}
+                    headers=headers,  # ⬅️ الإضافة الأهم
+                    ssl=False
                 ) as response:
+                    
+                    logger.info(f"API Response Status: {response.status}")
                     
                     if response.status == 200:
                         data = await response.json()
-                        logger.info(f"SSH account generated for user {user_id}: {data.get('Usuario')}")
+                        logger.info(f"SSH account generated for user {user_id}: {data}")
                         
                         ssh_info = f"""
 🔐 **تم الحصول على حساب SSH بنجاح!**
@@ -141,9 +149,23 @@ async def get_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(ssh_info, parse_mode='Markdown')
                         
                     else:
-                        error_msg = f"❌ فشل الاتصال بالخادم. الرمز: {response.status}"
-                        logger.warning(f"API error: {response.status} for user {user_id}")
-                        await wait_msg.edit_text(error_msg)
+                        # الحصول على تفاصيل الخطأ
+                        error_detail = await response.text()
+                        logger.warning(f"API error {response.status}: {error_detail}")
+                        
+                        error_msg = f"""
+❌ **خطأ في الاتصال**
+
+📊 **التفاصيل:**
+- الرمز: {response.status}
+- الحالة: {response.reason}
+
+🔧 **الحل:**
+- حاول مرة أخرى بعد قليل
+- تأكد من اتصال الإنترنت
+- للدعم: @SAYF1INFO
+                        """
+                        await wait_msg.edit_text(error_msg, parse_mode='Markdown')
                         
             except aiohttp.ClientError as e:
                 logger.error(f"Network error: {e}")
