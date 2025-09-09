@@ -63,25 +63,27 @@ def get_main_keyboard():
 
 # ==================== API Call ====================
 async def _call_api_create_account(user_id: int, username: str):
-    payload = {"user_id": user_id, "username": username, "timestamp": int(time.time())}
+    payload = {"store_owner_id": 1}  # كما نجح في curl
     timeout = aiohttp.ClientTimeout(total=Config.REQUEST_TIMEOUT)
     async with semaphore:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(Config.API_URL, json=payload) as resp:
                 text = await resp.text()
                 if resp.status in (200, 201):
-                    try: return await resp.json()
-                    except Exception: return json.loads(text)
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return json.loads(text)
                 raise RuntimeError(f"API error {resp.status}: {text}")
 
 async def provide_account_for_user(user_id: int, username: str):
     data = await _call_api_create_account(user_id, username)
     await set_user_cooldown(user_id)
-    
+
     # تحديث إحصاءات المستخدم
     current_count = int(await redis_client.get(f"stats:user_requests:{user_id}") or 0)
     await redis_client.set(f"stats:user_requests:{user_id}", current_count + 1)
-    
+
     return data
 
 async def send_account_message(chat_id: int, data: dict, context: ContextTypes.DEFAULT_TYPE):
@@ -170,31 +172,27 @@ async def health_handler(request):
 async def main():
     global redis_client, semaphore
     
-    # التحقق من المتغيرات المطلوبة
     if not Config.BOT_TOKEN:
         raise ValueError("BOT_TOKEN environment variable is required")
-    if not Config.API_URL:
-        raise ValueError("API_URL environment variable is required")
     
-    # إعداد Redis
+    # Redis
     redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
     await redis_client.ping()
     logger.info("Connected to Redis")
 
-    # إعداد Semaphore
     semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
-    # إعداد البوت
+    # Telegram bot
     app = Application.builder().token(Config.BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("get", get_command))
     app.add_handler(CommandHandler("mystats", my_stats_command))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # بدء مهمة الإشعارات
+    # Notifier
     notifier_task = asyncio.create_task(cooldown_notifier_task(app))
 
-    # إعداد خادم الصحة
+    # Web health
     web_app = web.Application()
     web_app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
     runner = web.AppRunner(web_app)
@@ -205,26 +203,18 @@ async def main():
 
     try:
         logger.info("Starting bot polling")
-        # استخدام start_polling بدلاً من run_polling
         await app.initialize()
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        
-        # الحفاظ على البرنامج يعمل
         while True:
             await asyncio.sleep(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Received interrupt signal")
     finally:
-        # تنظيف الموارد
         logger.info("Shutting down...")
         notifier_task.cancel()
         try:
             await notifier_task
         except asyncio.CancelledError:
             pass
-        
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
