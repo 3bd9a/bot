@@ -4,38 +4,25 @@ import logging
 import os
 import time
 from datetime import timedelta
-from typing import Dict
 
 import aiohttp
 import redis.asyncio as aioredis
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ==================== Configuration ====================
+# ==================== Config ====================
 class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-    API_URL = os.getenv("API_URL")  # لازم تحدده في الكوييب
+    API_URL = os.getenv("API_URL")  # يجب ضبطه في Secrets
+
     COOLDOWN_SECONDS = 3 * 60 * 60  # 3 ساعات
     REQUEST_TIMEOUT = 10
     MAX_CONCURRENT_REQUESTS = 25
-    ADMIN_USER_IDS = (
-        set(map(int, os.getenv("ADMIN_USERS", "").split(",")))
-        if os.getenv("ADMIN_USERS")
-        else set()
-    )
 
 # ==================== Logging ====================
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ssh_bot")
 
 # ==================== Globals ====================
@@ -46,8 +33,7 @@ COOLDOWNS_ZSET = "cooldowns_zset"
 # ==================== Helpers ====================
 def format_timedelta_seconds(s: int) -> str:
     td = timedelta(seconds=int(s))
-    days = td.days
-    hours, rem = divmod(td.seconds, 3600)
+    days, hours, rem = td.days, td.seconds // 3600, td.seconds % 3600
     minutes, seconds = divmod(rem, 60)
     parts = []
     if days: parts.append(f"{days}d")
@@ -56,7 +42,8 @@ def format_timedelta_seconds(s: int) -> str:
     if seconds and not parts: parts.append(f"{seconds}s")
     return " ".join(parts) if parts else "0s"
 
-async def set_user_cooldown(user_id: int, now_ts: int):
+async def set_user_cooldown(user_id: int):
+    now_ts = int(time.time())
     expiry = now_ts + Config.COOLDOWN_SECONDS
     await redis_client.set(f"cooldown:{user_id}", expiry)
     await redis_client.zadd(COOLDOWNS_ZSET, {str(user_id): expiry})
@@ -64,12 +51,9 @@ async def set_user_cooldown(user_id: int, now_ts: int):
 async def get_user_cooldown_remaining(user_id: int) -> int:
     v = await redis_client.get(f"cooldown:{user_id}")
     if not v: return 0
-    expiry = int(v)
-    now = int(time.time())
-    rem = expiry - now
+    rem = int(v) - int(time.time())
     return rem if rem > 0 else 0
 
-# ==================== Bot UI ====================
 def get_main_keyboard():
     kb = [
         [InlineKeyboardButton("🔐 احصل على حساب SSH", callback_data="get_account")],
@@ -77,17 +61,8 @@ def get_main_keyboard():
     ]
     return InlineKeyboardMarkup(kb)
 
-# ==================== Handlers ====================
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    rem = await get_user_cooldown_remaining(user.id)
-    rem_text = format_timedelta_seconds(rem) if rem else "جاهز الآن"
-    await update.message.reply_text(
-        f"🔐 بوت حسابات SSH\n\nمرحباً @{user.username or user.id}\n\n• حالتك: {rem_text}",
-        reply_markup=get_main_keyboard(),
-    )
-
-async def _call_api_create_account(user_id: int, username: str) -> Dict:
+# ==================== API Call ====================
+async def _call_api_create_account(user_id: int, username: str):
     payload = {"user_id": user_id, "username": username, "timestamp": int(time.time())}
     timeout = aiohttp.ClientTimeout(total=Config.REQUEST_TIMEOUT)
     async with semaphore:
@@ -101,10 +76,10 @@ async def _call_api_create_account(user_id: int, username: str) -> Dict:
 
 async def provide_account_for_user(user_id: int, username: str):
     data = await _call_api_create_account(user_id, username)
-    await set_user_cooldown(user_id, int(time.time()))
+    await set_user_cooldown(user_id)
     return data
 
-async def send_account_message(chat_id: int, data: Dict, context: ContextTypes.DEFAULT_TYPE):
+async def send_account_message(chat_id: int, data: dict, context: ContextTypes.DEFAULT_TYPE):
     ssh_info = (
         f"🎉 **تم إنشاء حساب SSH بنجاح!**\n\n"
         f"👤 المستخدم: `{data.get('Usuario','N/A')}`\n"
@@ -114,6 +89,7 @@ async def send_account_message(chat_id: int, data: Dict, context: ContextTypes.D
     )
     await context.bot.send_message(chat_id=chat_id, text=ssh_info, parse_mode="Markdown")
 
+# ==================== Handlers ====================
 async def handle_get_request(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str, chat_id: int):
     rem = await get_user_cooldown_remaining(user_id)
     if rem:
@@ -127,6 +103,15 @@ async def handle_get_request(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception:
         logger.exception("Failed to create account")
         await progress.edit_text("❌ فشل إنشاء الحساب. حاول لاحقًا.")
+
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    rem = await get_user_cooldown_remaining(user.id)
+    rem_text = format_timedelta_seconds(rem) if rem else "جاهز الآن"
+    await update.message.reply_text(
+        f"🔐 بوت حسابات SSH\n\nمرحباً @{user.username or user.id}\n\n• حالتك: {rem_text}",
+        reply_markup=get_main_keyboard(),
+    )
 
 async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -146,8 +131,7 @@ async def my_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_requests = int(await redis_client.get(f"stats:user_requests:{user.id}") or 0)
     rem = await get_user_cooldown_remaining(user.id)
     rem_text = format_timedelta_seconds(rem) if rem else "جاهز الآن"
-    text = f"📊 إحصائياتك\n\n• إجمالي الطلبات: {user_requests}\n• حالتك: {rem_text}"
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📊 إحصائياتك\n\n• إجمالي الطلبات: {user_requests}\n• حالتك: {rem_text}")
 
 # ==================== Notifier ====================
 async def cooldown_notifier_task(app: Application):
@@ -173,18 +157,13 @@ async def cooldown_notifier_task(app: Application):
             logger.exception("Error in notifier task")
             await asyncio.sleep(5)
 
-# ==================== Web health ====================
+# ==================== Web ====================
 async def health_handler(request):
     return web.json_response({"status": "ok", "ts": time.time()})
 
 # ==================== Main ====================
-async def start_bot():
+async def init_bot():
     global redis_client, semaphore
-
-    if not Config.BOT_TOKEN or not Config.API_URL:
-        logger.critical("BOT_TOKEN or API_URL not set")
-        return
-
     redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True)
     await redis_client.ping()
     logger.info("Connected to Redis")
@@ -197,10 +176,10 @@ async def start_bot():
     app.add_handler(CommandHandler("mystats", my_stats_command))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # Notifier task
-    notifier_task = asyncio.create_task(cooldown_notifier_task(app))
+    # Notifier
+    asyncio.create_task(cooldown_notifier_task(app))
 
-    # Web server
+    # Health server
     web_app = web.Application()
     web_app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
     runner = web.AppRunner(web_app)
@@ -208,14 +187,9 @@ async def start_bot():
     site = web.TCPSite(runner, "0.0.0.0", 8000)
     await site.start()
 
-    # تشغيل البوت
-    await app.run_polling(drop_pending_updates=True, close_loop=False)
+    logger.info("Starting bot polling")
+    await app.run_polling(drop_pending_updates=True)
 
-    # Cleanup
-    notifier_task.cancel()
-    await notifier_task
-    await runner.cleanup()
-    await redis_client.close()
-
+# ==================== Entrypoint ====================
 if __name__ == "__main__":
-    asyncio.run(start_bot())
+    asyncio.run(init_bot())
