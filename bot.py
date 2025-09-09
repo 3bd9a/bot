@@ -198,9 +198,13 @@ async def main():
         logger.critical("BOT_TOKEN not set")
         return
 
-    redis_client = aioredis.from_url(Config.REDIS_URL, decode_responses=True, ssl=True)
-    await redis_client.ping()
-    logger.info("Connected to Redis")
+redis_client = aioredis.from_url(
+    Config.REDIS_URL,
+    decode_responses=True
+)
+await redis_client.ping()
+logger.info("Connected to Redis")
+
 
     semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
